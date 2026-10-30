@@ -61,6 +61,7 @@ class Pipeline:
     price_usd: int
     stages: list[Stage]
     validate: Callable[[dict], None] = lambda fields: None
+    turnaround_hours: int = 48
 
     def stage_names(self) -> list[str]:
         return [s.name for s in self.stages]
@@ -118,6 +119,8 @@ def create_order(pipeline: Pipeline, fields: dict, source: str = "manual",
         "external_id": external_id, "price_usd": fields.get("price_usd", pipeline.price_usd),
         "stage": pipeline.stages[0].name, "status": QUEUED, "waiting_on": None,
         "attempts": 0, "created_at": now(), "updated_at": now(), "history": [],
+        "due_at": (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=pipeline.turnaround_hours))
+        .strftime("%Y-%m-%dT%H:%M:%SZ"),
         "artifacts": {},
     }
     order = Order(data, home / "orders" / f"{oid}.json", home)
@@ -181,6 +184,24 @@ def advance(order: Order, pipeline: Pipeline) -> None:
     order.save()
 
 
+def purge_code(days: int = 7) -> list[str]:
+    """Delete customer code (work/<id>/repo) for orders delivered `days` or more ago.
+    The delivered report stays in deliverables/."""
+    import shutil
+
+    cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    purged = []
+    for o in load_orders():
+        repo = o.home / "work" / o.id / "repo"
+        if o.data["status"] == DONE and o.data.get("sent_at", "9") <= cutoff and repo.exists():
+            shutil.rmtree(repo)
+            o.data["code_deleted_at"] = now()
+            o.log("customer code deleted")
+            o.save()
+            purged.append(o.id)
+    return purged
+
+
 def resume(order: Order, note: str) -> None:
     """Clear a wait (or a failure) so the next tick re-runs the current stage."""
     order.data.update(status=QUEUED, waiting_on=None, attempts=0)
@@ -236,13 +257,13 @@ def write_board(orders: list[Order], pipelines: dict[str, Pipeline]) -> Path:
         lines += ["## Needs Claude", ""]
         lines += [f"- `{o.id}`: {o.data['waiting_on']['reason']}" for o in s["needs_claude"]]
         lines.append("")
-    lines += ["## All orders", "", "| Order | Product | Stage | Status | Customer | Updated |",
-              "|---|---|---|---|---|---|"]
+    lines += ["## All orders", "", "| Order | Product | Stage | Status | Customer | Due | Updated |",
+              "|---|---|---|---|---|---|---|"]
     for o in sorted(orders, key=lambda o: o.data["updated_at"], reverse=True):
         d = o.data
         title = pipelines[d["product"]].title if d["product"] in pipelines else d["product"]
         lines.append(f"| `{d['id']}` | {title} | {d['stage']} | {d['status']} | "
-                     f"{d['fields'].get('email', '')} | {d['updated_at']} |")
+                     f"{d['fields'].get('email', '')} | {d.get('due_at', '')} | {d['updated_at']} |")
     md = "\n".join(lines) + "\n"
     (home / "STATUS.md").write_text(md)
     (home / "status.html").write_text(_board_html(orders, s, pipelines))

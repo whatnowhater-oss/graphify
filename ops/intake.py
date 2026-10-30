@@ -3,7 +3,7 @@
 Three ways in, all ending in core.create_order:
   * a JSON file dropped in $OPS_HOME/inbox/ (from a Zapier/Make hook, a form, or by hand)
   * `python -m ops new <product> --field k=v ...`
-  * a raw store webhook payload (Lemon Squeezy or Gumroad), via either of the above
+  * a raw store webhook payload (Stripe, Lemon Squeezy or Gumroad), via either of the above
 
 Store payloads are matched to a product by keywords in the product name, so the
 store listing just needs "X-ray" or "cleanup" in its title.
@@ -58,7 +58,32 @@ def from_gumroad(payload: dict) -> tuple[str, dict, str]:
     return product, fields, f"gumroad:{payload['sale_id']}"
 
 
-PROVIDERS = {"lemonsqueezy": from_lemonsqueezy, "gumroad": from_gumroad}
+def from_stripe(payload: dict) -> tuple[str, dict, str]:
+    """checkout.session.completed from a Payment Link. Set metadata product=xray (or
+    cleanup) on the Payment Link; checkout custom fields become order fields."""
+    if payload.get("type") != "checkout.session.completed":
+        raise Reject(f"ignored Stripe event {payload.get('type')}")
+    s = payload["data"]["object"]
+    if s.get("payment_status") not in (None, "paid"):
+        raise Reject(f"Stripe session not paid ({s.get('payment_status')})")
+    fields = {}
+    for cf in s.get("custom_fields") or []:
+        label = (cf.get("label") or {}).get("custom") or cf.get("key", "")
+        value = (cf.get(cf.get("type", "text")) or {}).get("value")
+        key = _norm_key(label)
+        if "github" in key or "repo" in key or "url" in key:
+            key = "repo_url"
+        fields[key] = value
+    details = s.get("customer_details") or {}
+    fields.setdefault("email", details.get("email"))
+    fields.setdefault("name", details.get("name"))
+    fields["price_usd"] = round((s.get("amount_total") or 0) / 100)
+    meta = s.get("metadata") or {}
+    product = meta.get("product") or ("xray" if "repo_url" in fields else _product_for(meta.get("name", "")))
+    return product, fields, f"stripe:{s['id']}"
+
+
+PROVIDERS = {"stripe": from_stripe, "lemonsqueezy": from_lemonsqueezy, "gumroad": from_gumroad}
 
 
 def order_from_message(msg: dict, pipelines: dict[str, Pipeline], source: str) -> Order:

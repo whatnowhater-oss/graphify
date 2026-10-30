@@ -2,12 +2,13 @@
 
   tick                      ingest the inbox, push every open order forward, refresh the board
   new <product> k=v ...     create an order by hand (e.g. new xray repo_url=... email=...)
-  webhook <provider> FILE   turn a saved Lemon Squeezy / Gumroad payload into an order
+  webhook <provider> FILE   turn a saved stripe / lemonsqueezy / gumroad payload into an order
   board                     print the status board
   show <id>                 print one order with its history
   todo [claude|jay]         list orders waiting on someone
   resume <id> [note]        clear a wait after fixing what it asked for
   sent <id>                 record that the delivery email went out (finishes the order)
+  purge [days]              delete customer code for orders delivered N days ago (default 7)
   stages                    list each product's stages
 """
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import json
 import sys
 
-from .core import Reject, get_order, load_orders, now, resume, tick, write_board
+from .core import Reject, get_order, load_orders, now, purge_code, resume, tick, write_board
 from .intake import order_from_message
 from .pipelines import PIPELINES
 
@@ -60,6 +61,9 @@ def main(argv: list[str]) -> int:
         o.data["sent_at"] = now()
         resume(o, "delivery email sent")
         tick(PIPELINES)
+    elif cmd == "purge":
+        for oid in purge_code(int(args[0]) if args else 7):
+            print(f"deleted code for {oid}")
     elif cmd == "stages":
         for p in PIPELINES.values():
             print(f"{p.product} ({p.title}, ${p.price_usd}):")

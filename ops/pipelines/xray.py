@@ -4,6 +4,7 @@ intake -> fetch -> map -> write_guide -> qa -> package -> deliver
 """
 from __future__ import annotations
 
+import datetime as _dt
 import re
 import shutil
 import subprocess
@@ -18,7 +19,7 @@ HERE = Path(__file__).parent
 ALLOWED_HOSTS = {"github.com", "gitlab.com", "bitbucket.org", "codeberg.org"}
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".kt", ".rb", ".php",
             ".cs", ".c", ".cc", ".cpp", ".h", ".hpp", ".swift", ".scala", ".ex", ".exs", ".vue", ".svelte"}
-MAX_CODE_LINES = 400_000
+MAX_CODE_LINES = 150_000  # the sales page promise; bigger repos get quoted first
 REQUIRED_SECTIONS = ["one-minute version", "map of the code", "core abstractions",
                      "surprise", "where to make common changes"]
 SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", "graphify-out", "__pycache__", ".venv"}
@@ -28,6 +29,8 @@ def _validate(fields: dict) -> None:
     url = (fields.get("repo_url") or "").strip()
     if not url:
         raise Reject("order has no repo_url")
+    if url.upper() == "PRIVATE":
+        return  # code arrives later as a zip by email
     if url.startswith(("/", "file://")):
         return  # local path: used by tests and for repos jay uploads by hand
     u = urlparse(url)
@@ -58,6 +61,9 @@ def fetch(o: Order) -> None:
     if (dest / ".git").exists() or (dest.exists() and any(dest.iterdir())):
         return
     url = o.fields["repo_url"].strip()
+    if url.upper() == "PRIVATE":
+        raise Wait(f"private code: download the buyer's zip (Google Drive link in their email), unzip it "
+                   f"into {dest} without running anything in it, then `ops resume {o.id}`", "claude")
     if url.startswith(("/", "file://")):
         src = Path(url.removeprefix("file://"))
         shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "graphify-out"))
@@ -77,7 +83,8 @@ def fetch(o: Order) -> None:
     if not files:
         raise Reject("no source code found in the repo")
     if lines > MAX_CODE_LINES:
-        raise Wait(f"repo has {lines:,} lines, over the {MAX_CODE_LINES:,} limit; quote a custom price", "jay")
+        raise Wait(f"repo has {lines:,} lines, over the {MAX_CODE_LINES:,} limit; offer the buyer a refund "
+                   "or a report on the main source folder (set fields.subdir), per OPERATIONS.md", "claude")
     o.log(f"fetched {len(files)} code files, {lines:,} lines")
 
 
@@ -188,27 +195,28 @@ def qa(o: Order) -> None:
     o.log(f"QA passed: {words} words, {len(refs)} file references, all real")
 
 
+def _repo_name(o: Order) -> str:
+    url = o.fields["repo_url"].strip()
+    if url.upper() == "PRIVATE":
+        return o.fields.get("repo_name") or "your-code"
+    return re.sub(r"[^\w-]", "", url.rstrip("/").split("/")[-1].removesuffix(".git"))
+
+
 def _name(o: Order) -> str:
-    return "codebase-xray-" + re.sub(r"[^\w-]", "", o.fields["repo_url"].rstrip("/").split("/")[-1].removesuffix(".git"))
+    return f"xray-{_repo_name(o)}-{o.data['created_at'][:10]}"
 
 
 def _subject(o: Order) -> str:
-    return f"Your Codebase X-ray: {o.fields['repo_url'].rstrip('/').split('/')[-1]}"
+    return f"Your Codebase X-ray of {_repo_name(o)} is ready"
 
 
 def _body(o: Order) -> str:
-    name = o.fields.get("name") or "there"
-    return f"""Hi {name},
+    # Template C from xray/OPERATIONS.md. {drive_link} is filled in by whoever uploads the zip.
+    deleted = (_dt.date.today() + _dt.timedelta(days=7)).isoformat()
+    return f"""Here's your report: {{drive_link}}
 
-Your Codebase X-ray is ready. It's attached as a zip with three files:
+Open graph.html in any browser for the interactive map, and start with XRAY_GUIDE for the written tour. You can send up to two follow-up questions by replying to this email. We'll delete your code on {deleted}. If the report isn't useful, reply within 7 days for a full refund.
 
-- XRAY_GUIDE.md: the written tour. Start with "The one-minute version".
-- graph.html: the interactive map. Open it in any browser and click a node to see what it connects to.
-- GRAPH_REPORT.md: the raw numbers behind the map.
-
-If anything in the guide doesn't match your code, reply to this email and I'll fix it the same day.
-
-Thanks for your order,
 {{sender}}
 """
 

@@ -42,23 +42,25 @@ pytest ops/tests                            # offline end-to-end tests
 
 ## How orders get in
 
-1. **Store webhook (best, zero touch).** Point a Lemon Squeezy `order_created`
-   webhook or Gumroad ping at anything that can save the JSON body into
-   `$OPS_HOME/inbox/` as `{"provider": "lemonsqueezy", "payload": {...}}`. A
-   Zapier or Make "catch hook, write file" zap does this. Duplicate deliveries of
-   the same webhook don't create duplicate orders.
-2. **Sale emails.** The scheduled Claude session (see `ROUTINE.md`) reads store
-   notification emails with the Gmail connector and creates orders.
+1. **Payment emails (the default).** The scheduled Claude session (see
+   `ROUTINE.md`) reads Stripe payment emails with the Gmail connector and creates
+   orders. Nothing to set up beyond the Stripe Payment Link.
+2. **Webhook (optional, faster).** A Stripe `checkout.session.completed` webhook
+   (or Lemon Squeezy `order_created` / Gumroad ping) saved into `$OPS_HOME/inbox/`
+   as `{"provider": "stripe", "payload": {...}}`. Duplicate deliveries of the same
+   webhook don't create duplicate orders. Set metadata `product=xray` on the
+   Payment Link; a checkout field whose label mentions "GitHub URL" becomes the repo.
 3. **By hand.** `python -m ops new ...`.
 
-The store product name must contain "X-ray" or "cleanup" so the payload maps to a
-pipeline. Add a checkout custom field named "Repo URL" for X-ray.
+Buyers who write PRIVATE instead of a link get an order that waits for Claude to
+fetch their zip from Google Drive. Customer code is deleted 7 days after delivery
+(`ops purge`), as the sales page promises.
 
 ## What needs jay, honestly
 
-- A store account (Lemon Squeezy or Gumroad), already on the launch list.
+- The Stripe Payment Link, already on the launch list.
 - Approving each delivery email, until jay sets `"auto_send": true` in
   `$OPS_HOME/config.json`. After that Claude sends them.
 - Optional: an Anthropic API key so guides get written the moment an order
   lands, instead of on the next scheduled Claude run.
-- Orders that need a judgment call: private repos, repos over 400k lines, files over 50 MB.
+- Refunds, disputes and unhappy buyers (escalated per `xray/OPERATIONS.md`).

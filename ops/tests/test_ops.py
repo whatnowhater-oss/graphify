@@ -167,3 +167,40 @@ def test_crashing_stage_retries_then_escalates(home, pipelines, monkeypatch):
         tick(pipelines)
     o = get_order(o.id)
     assert o.data["status"] == "failed" and "network down" in o.data["waiting_on"]["reason"]
+
+
+def test_stripe_payment_link_private_order_and_purge(home, pipelines, tmp_path):
+    from ops.core import get_order, purge_code, resume, tick
+    from ops.intake import drop_in_inbox
+
+    session = {"id": "cs_1", "payment_status": "paid", "amount_total": 19900,
+               "customer_details": {"email": "p@x.io", "name": "P"}, "metadata": {"product": "xray"},
+               "custom_fields": [{"key": "repo", "type": "text",
+                                  "label": {"type": "custom", "custom": "Public GitHub URL, or write PRIVATE"},
+                                  "text": {"value": "PRIVATE"}}]}
+    drop_in_inbox({"provider": "stripe", "payload": {"type": "checkout.session.completed",
+                                                     "data": {"object": session}}}, "st1")
+    tick(pipelines)
+    o = get_order("xray")
+    assert o.data["external_id"] == "stripe:cs_1" and o.data["price_usd"] == 199
+    assert o.data["stage"] == "fetch" and "private code" in o.data["waiting_on"]["reason"]
+
+    # Claude unzips the buyer's code into the repo folder; the rest of the pipeline runs as normal
+    if shutil.which("graphify") is None:
+        return
+    shutil.copytree(_tiny_repo(tmp_path), o.workdir / "repo")
+    resume(o, "zip unpacked")
+    tick(pipelines)
+    o = get_order(o.id)
+    assert o.data["stage"] == "write_guide"
+    (o.workdir / "XRAY_GUIDE.md").write_text(_guide(
+        ["src/shop/cart.py", "src/shop/prices.py", "src/shop/checkout.py", "cart.py", "checkout.py"]))
+    resume(o, "guide written")
+    tick(pipelines)
+    o = get_order(o.id)
+    email = (o.outdir / "delivery_email.md").read_text()
+    assert "Subject: Your Codebase X-ray of your-code is ready" in email and "{drive_link}" in email
+
+    o.data.update(sent_at="2026-01-01T00:00:00Z", status="done")
+    o.save()
+    assert purge_code(7) == [o.id] and not (o.workdir / "repo").exists()
