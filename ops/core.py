@@ -20,6 +20,9 @@ from typing import Callable
 
 MAX_ATTEMPTS = 3
 
+# Share of the sale a channel keeps, in percent (approximate; used for the board's take-home figure).
+CHANNEL_FEES = {"fiverr": 20, "stripe": 3, "direct": 3}
+
 # Order status values. "waiting" always carries a reason in order["waiting_on"].
 QUEUED, WAITING, FAILED, DONE = "queued", "waiting", "failed", "done"
 
@@ -62,6 +65,9 @@ class Pipeline:
     stages: list[Stage]
     validate: Callable[[dict], None] = lambda fields: None
     turnaround_hours: int = 48
+    # Customer data is deleted this many days after delivery (each product's sales page promises a number).
+    retention_days: int = 7
+    customer_data: Callable[["Order"], list[Path]] = lambda o: [o.workdir / "repo"]
 
     def stage_names(self) -> list[str]:
         return [s.name for s in self.stages]
@@ -116,7 +122,9 @@ def create_order(pipeline: Pipeline, fields: dict, source: str = "manual",
     oid = f"{pipeline.product}-{_dt.date.today():%Y%m%d}-{secrets.token_hex(3)}"
     data = {
         "id": oid, "product": pipeline.product, "fields": fields, "source": source,
-        "external_id": external_id, "price_usd": fields.get("price_usd", pipeline.price_usd),
+        "external_id": external_id, "price_usd": int(fields.pop("price_usd", pipeline.price_usd) or 0),
+        "channel": fields.get("channel", "stripe"),
+        "fee_pct": CHANNEL_FEES.get(fields.get("channel", "stripe"), 3),
         "stage": pipeline.stages[0].name, "status": QUEUED, "waiting_on": None,
         "attempts": 0, "created_at": now(), "updated_at": now(), "history": [],
         "due_at": (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=pipeline.turnaround_hours))
@@ -184,21 +192,30 @@ def advance(order: Order, pipeline: Pipeline) -> None:
     order.save()
 
 
-def purge_code(days: int = 7) -> list[str]:
-    """Delete customer code (work/<id>/repo) for orders delivered `days` or more ago.
-    The delivered report stays in deliverables/."""
+def purge_customer_data(pipelines: dict[str, Pipeline], days: int | None = None) -> list[str]:
+    """Delete each delivered order's customer data once its product's retention
+    period (or `days`, if given) has passed. What counts as customer data is the
+    pipeline's call: the cloned repo for X-ray, every copy of the file for cleanup."""
     import shutil
 
-    cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     purged = []
     for o in load_orders():
-        repo = o.home / "work" / o.id / "repo"
-        if o.data["status"] == DONE and o.data.get("sent_at", "9") <= cutoff and repo.exists():
-            shutil.rmtree(repo)
-            o.data["code_deleted_at"] = now()
-            o.log("customer code deleted")
-            o.save()
-            purged.append(o.id)
+        p = pipelines.get(o.data["product"])
+        if p is None or o.data["status"] != DONE or not o.data.get("sent_at") or o.data.get("data_deleted_at"):
+            continue
+        keep = p.retention_days if days is None else days
+        cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=keep)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if o.data["sent_at"] > cutoff:
+            continue
+        for path in p.customer_data(o):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.exists():
+                path.unlink()
+        o.data["data_deleted_at"] = now()
+        o.log(f"customer data deleted ({keep}-day retention)")
+        o.save()
+        purged.append(o.id)
     return purged
 
 
@@ -237,6 +254,8 @@ def summarize(orders: list[Order]) -> dict:
         "needs_claude": [o for o in orders if (o.data.get("waiting_on") or {}).get("who") == "claude"],
         "delivered_this_week": len(done_week),
         "revenue_this_week": sum(o.data["price_usd"] for o in done_week),
+        "kept_this_week": round(sum(o.data["price_usd"] * (100 - o.data.get("fee_pct", 3)) / 100
+                                    for o in done_week)),
     }
 
 
@@ -246,7 +265,8 @@ def write_board(orders: list[Order], pipelines: dict[str, Pipeline]) -> Path:
     lines = [
         "# Order board", "",
         f"Updated {now()}. Week starting {_week_start()}: "
-        f"**{s['delivered_this_week']} delivered, ${s['revenue_this_week']} of $1,000 goal**. "
+        f"**{s['delivered_this_week']} delivered, ${s['kept_this_week']} kept after fees of the $1,000 goal** "
+        f"(${s['revenue_this_week']} in sales). "
         f"{s['open']} open.", "",
     ]
     if s["needs_jay"]:
@@ -278,7 +298,7 @@ def _board_html(orders, s, pipelines) -> str:
         f"<td>{html.escape((o.data.get('waiting_on') or {}).get('reason', ''))}</td>"
         f"<td>{html.escape(o.data['updated_at'])}</td></tr>"
         for o in sorted(orders, key=lambda o: o.data["updated_at"], reverse=True))
-    pct = min(100, s["revenue_this_week"] // 10)
+    pct = min(100, s["kept_this_week"] // 10)
     return f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Order board</title>
 <style>
@@ -291,7 +311,7 @@ table{{width:100%;border-collapse:collapse;font-size:14px}}td,th{{text-align:lef
 p.m{{color:var(--mut)}}
 </style>
 <h1>Order board</h1>
-<p><b>${s['revenue_this_week']}</b> of $1,000 this week · {s['delivered_this_week']} delivered · {s['open']} open · {len(s['needs_jay'])} need jay</p>
+<p><b>${s['kept_this_week']}</b> of $1,000 kept this week (${s['revenue_this_week']} in sales) · {s['delivered_this_week']} delivered · {s['open']} open · {len(s['needs_jay'])} need jay</p>
 <div class="goal"><div></div></div>
 <div class="wrap"><table><tr><th>Order</th><th>Product</th><th>Stage</th><th>Status</th><th>Waiting on</th><th>Updated</th></tr>{rows}</table></div>
 <p class="m">Updated {now()}</p>

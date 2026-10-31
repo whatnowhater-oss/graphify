@@ -79,7 +79,14 @@ def from_stripe(payload: dict) -> tuple[str, dict, str]:
     fields.setdefault("name", details.get("name"))
     fields["price_usd"] = round((s.get("amount_total") or 0) / 100)
     meta = s.get("metadata") or {}
-    product = meta.get("product") or ("xray" if "repo_url" in fields else _product_for(meta.get("name", "")))
+    product = meta.get("product")
+    if not product:
+        if "repo_url" in fields:
+            product = "xray"
+        elif fields["price_usd"] in (19, 49, 149):
+            product = "kit"  # Repo Kit links collect no custom fields
+        else:
+            product = _product_for(meta.get("name", ""))
     return product, fields, f"stripe:{s['id']}"
 
 

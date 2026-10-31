@@ -20,7 +20,8 @@ then show as failed on the board. Tick is safe to run as often as you like.
 | Product | Stages | Agent work |
 |---|---|---|
 | `xray`: Codebase X-ray, $199 | intake, fetch, map, write_guide, qa, package, deliver | The code map needs no LLM. The guide is written by Claude: through the API if `ANTHROPIC_API_KEY` is set, otherwise by a Claude session following `BRIEF.md`. QA rejects any guide that cites a file not in the repo, misses a section, or leaks a secret. |
-| `cleanup`: customer list cleanup, $149 | intake, map_columns, clean, qa, package, deliver | Deterministic cleaner. If the customer's columns are named differently, Claude writes a column map instead of guessing. QA checks no rows were lost. |
+| `cleanup`: list cleanup, $249 on Fiverr | intake, map_columns, clean, qa, package, deliver | Deterministic cleaner for .csv or .xlsx up to 10,000 rows (Excel in, Excel out). If the buyer's columns are named differently, Claude writes a column map instead of guessing. QA checks no rows were lost. Delivered on the Fiverr order page; every copy of the buyer's file is deleted 30 days after delivery. |
+| `kit`: Repo Kit, $19 / $49 / $149 | record | Stripe's checkout redirect delivers the download, so the order is just logged and counted. |
 
 Add a product by writing `ops/pipelines/<name>.py` with a `PIPELINE` and listing it
 in `ops/pipelines/__init__.py`. `package_stage`, `deliver_stage` and
@@ -52,9 +53,15 @@ pytest ops/tests                            # offline end-to-end tests
    Payment Link; a checkout field whose label mentions "GitHub URL" becomes the repo.
 3. **By hand.** `python -m ops new ...`.
 
+The board's goal line counts what's kept after fees (Fiverr 20%, Stripe about 3%),
+because that's what reaches jay.
+
+Fiverr orders come in by hand or from the Fiverr notification email:
+`ops new cleanup file_path=$OPS_HOME/uploads/<order>.xlsx channel=fiverr external_id=fiverr:<order> name=<buyer>`.
+
 Buyers who write PRIVATE instead of a link get an order that waits for Claude to
-fetch their zip from Google Drive. Customer code is deleted 7 days after delivery
-(`ops purge`), as the sales page promises.
+fetch their zip from Google Drive. Customer data is deleted after each product's promised
+retention period (`ops purge`): 7 days for X-ray code, 30 days for cleanup files.
 
 ## What needs jay, honestly
 

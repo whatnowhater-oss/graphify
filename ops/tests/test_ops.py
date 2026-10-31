@@ -102,7 +102,7 @@ def test_cleanup_pipeline_and_board(home, pipelines):
     main(["sent", o.id])
     assert get_order(o.id).data["status"] == "done"
     board = (home / "STATUS.md").read_text()
-    assert "1 delivered, $149" in board
+    assert "1 delivered, $242 kept after fees" in board and "($249 in sales)" in board
     assert len(load_orders()) == 1
 
 
@@ -170,7 +170,7 @@ def test_crashing_stage_retries_then_escalates(home, pipelines, monkeypatch):
 
 
 def test_stripe_payment_link_private_order_and_purge(home, pipelines, tmp_path):
-    from ops.core import get_order, purge_code, resume, tick
+    from ops.core import get_order, purge_customer_data, resume, tick
     from ops.intake import drop_in_inbox
 
     session = {"id": "cs_1", "payment_status": "paid", "amount_total": 19900,
@@ -203,4 +203,57 @@ def test_stripe_payment_link_private_order_and_purge(home, pipelines, tmp_path):
 
     o.data.update(sent_at="2026-01-01T00:00:00Z", status="done")
     o.save()
-    assert purge_code(7) == [o.id] and not (o.workdir / "repo").exists()
+    assert purge_customer_data(pipelines) == [o.id] and not (o.workdir / "repo").exists()
+    assert (o.outdir / "XRAY_GUIDE.md").exists()  # the delivered report is kept
+
+
+def test_fiverr_excel_order_delivers_on_fiverr_and_purges_at_30_days(home, pipelines, tmp_path):
+    import openpyxl
+
+    from ops.core import get_order, purge_customer_data, tick
+    from ops.intake import order_from_message
+
+    wb = openpyxl.Workbook()
+    with open(FIXTURES / "before_customers.csv", newline="") as fh:
+        for row in __import__("csv").reader(fh):
+            wb.active.append(row)
+    upload = home / "uploads" / "FO123.xlsx"
+    upload.parent.mkdir(parents=True)
+    wb.save(upload)
+    o = order_from_message({"product": "cleanup", "external_id": "fiverr:FO123", "fields": {
+        "file_path": str(upload), "channel": "fiverr", "name": "Pat"}}, pipelines, "test")
+    tick(pipelines)
+    o = get_order(o.id)
+    assert o.data["stage"] == "deliver" and "Fiverr order page" in o.data["waiting_on"]["reason"]
+    assert (o.outdir / "clean.xlsx").exists() and (o.outdir / "delivery_message.md").exists()
+
+    o.data.update(sent_at="2026-01-01T00:00:00Z", status="done")
+    o.save()
+    assert purge_customer_data(pipelines) == [o.id]
+    assert not upload.exists() and not (home / "deliverables" / o.id).exists()
+
+
+def test_more_than_10k_rows_waits_for_a_custom_offer(home, pipelines, tmp_path):
+    from ops.core import get_order, tick
+    from ops.intake import order_from_message
+
+    big = tmp_path / "big.csv"
+    rows = (FIXTURES / "before_customers.csv").read_text().splitlines()
+    big.write_text("\n".join([rows[0]] + rows[1:2] * 10_001) + "\n")
+    o = order_from_message({"product": "cleanup", "fields": {"file_path": str(big)}}, pipelines, "test")
+    tick(pipelines)
+    assert "custom offer" in get_order(o.id).data["waiting_on"]["reason"]
+
+
+def test_repo_kit_sale_is_logged_as_done(home, pipelines):
+    from ops.core import load_orders, summarize, tick
+    from ops.intake import drop_in_inbox
+
+    session = {"id": "cs_kit", "payment_status": "paid", "amount_total": 4900,
+               "customer_details": {"email": "k@x.io"}, "custom_fields": []}
+    drop_in_inbox({"provider": "stripe", "payload": {"type": "checkout.session.completed",
+                                                     "data": {"object": session}}}, "kit1")
+    tick(pipelines)
+    (o,) = load_orders()
+    assert o.data["product"] == "kit" and o.data["status"] == "done" and o.fields["tier"] == "kit"
+    assert summarize([o])["kept_this_week"] == 48

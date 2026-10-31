@@ -53,27 +53,35 @@ def package_stage(files: list[str], bundle_name: Callable) -> Stage:
 
 
 def deliver_stage(subject: Callable, body: Callable) -> Stage:
-    """Write the delivery email, then wait until someone confirms it was sent.
+    """Write the delivery message, then wait until someone confirms it went out.
 
-    Sending is never done by this code. With config auto_send=true (jay's
-    standing OK) the wait is on Claude, who sends it with the Gmail connector;
-    otherwise it waits on jay to approve.
+    Sending is never done by this code. Orders from a marketplace (channel
+    "fiverr") are delivered on that marketplace's order page, not by email.
+    With config auto_send=true (jay's standing OK) the wait is on Claude, who
+    sends it (Gmail connector, or jay's browser over Remote Control for
+    Fiverr); otherwise it waits on jay to approve.
     """
 
     def run(o: Order) -> None:
         if o.data.get("sent_at"):
             return
-        draft = o.outdir / "delivery_email.md"
+        fiverr = o.data.get("channel") == "fiverr"
+        draft = o.outdir / ("delivery_message.md" if fiverr else "delivery_email.md")
         if not draft.exists():
-            to = o.fields.get("email") or "(no email on order)"
-            draft.write_text(f"To: {to}\nSubject: {subject(o)}\nAttach: {o.data['artifacts'].get('bundle')}\n\n"
-                             + body(o).replace("{sender}", config()["sender_name"]))
-            o.data["artifacts"]["email_draft"] = str(draft)
+            text = body(o).replace("{sender}", config()["sender_name"])
+            if fiverr:
+                draft.write_text(f"Fiverr order: {o.data.get('external_id') or '(not recorded)'}\n"
+                                 f"Upload: every file in {o.outdir} except this one\n\n{text}")
+            else:
+                to = o.fields.get("email") or "(no email on order)"
+                draft.write_text(f"To: {to}\nSubject: {subject(o)}\nAttach: {o.data['artifacts'].get('bundle')}\n\n{text}")
+            o.data["artifacts"]["delivery_draft"] = str(draft)
+        where = "on the Fiverr order page" if fiverr else "by email"
         if config()["auto_send"]:
-            raise Wait(f"send {draft.name} with the zip attached, then run `ops sent {o.id}`", "claude")
-        raise Wait(f"approve the delivery email at {draft}, then run `ops sent {o.id}` once sent", "jay")
+            raise Wait(f"deliver {draft.name} {where}, then run `ops sent {o.id}`", "claude")
+        raise Wait(f"approve {draft} (delivered {where}), then `ops sent {o.id}` once it's out", "jay")
 
-    return Stage("deliver", run, "email the customer")
+    return Stage("deliver", run, "deliver to the customer")
 
 
 def have_api_credentials() -> bool:

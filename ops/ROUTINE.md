@@ -21,6 +21,11 @@ anywhere else are lost when the container ends.
 ## 2. Bring in new orders
 
 - `python -m ops tick` picks up anything already dropped in `$OPS_HOME/inbox/`.
+- Fiverr order emails: download the buyer's file into `$OPS_HOME/uploads/`
+  (Remote Control in jay's browser, or ask jay), then
+  `python -m ops new cleanup file_path=<that file> channel=fiverr external_id=fiverr:<order number> name=<buyer>`.
+  Repo Kit sales need nothing: Stripe delivers them; log them with
+  `python -m ops new kit price_usd=<amount> email=<buyer> external_id=<receipt>` so the board counts them.
 - If the Gmail connector is available, search for Stripe payment emails and
   buyer emails received since the last run. For each new payment not already on
   the board, send confirmation template A, then create the order:
@@ -40,14 +45,16 @@ Run `python -m ops tick`, then `python -m ops todo claude`. For each item:
 | `repo has ... lines, over the` | Email the buyer the refund-or-main-folder offer from OPERATIONS.md step 5. If they pick a folder, `ops show` the order, add `"subdir": "<folder>"` to its fields, then `resume`. |
 | `QA failed` | Open `work/<id>/QA_REPORT.md`, fix only what it lists in the guide, then `resume`. Never edit the QA rules to get a pass. |
 | `columns [...] don't match` | Write `column_map.json` mapping each expected column to the customer's column name, then `resume`. |
-| `send delivery_email.md` | Only appears when jay has set `"auto_send": true` in `$OPS_HOME/config.json` (his standing OK for delivery emails). Upload the zip to Google Drive shared with the buyer's email only, put that link in place of `{drive_link}`, send with the Gmail connector, then `python -m ops sent <id>`. |
+| `deliver delivery_message.md on the Fiverr order page` | Only with `auto_send`. Over Remote Control in jay's browser, open the Fiverr order, upload the files listed at the top of the draft, paste the message, click Deliver, then `ops sent <id>`. Without Remote Control, leave it for jay. |
+| `deliver delivery_email.md by email` | Only appears when jay has set `"auto_send": true` in `$OPS_HOME/config.json` (jay's standing OK for deliveries). Upload the zip to Google Drive shared with the buyer's email only, put that link in place of `{drive_link}`, send with the Gmail connector, then `python -m ops sent <id>`. |
 | `... failed: ...` (status failed) | Read `last_error` in `python -m ops show <id>`. Fix the cause if it is in this repo's `ops/` code, otherwise leave it for jay with a one-line explanation. |
 
 Run `python -m ops tick` again after resuming, until `todo claude` is empty or
 every remaining item is blocked on something you can't do.
 
-Then run `python -m ops purge` to delete customer code 7 days after delivery
-(the sales page promises this). Delete any Drive copy of the buyer's code too.
+Then run `python -m ops purge`. It deletes customer data once each product's
+promised retention ends (X-ray code after 7 days, cleanup files after 30). Delete
+any Drive copy of the buyer's code too.
 
 ## 4. Report
 

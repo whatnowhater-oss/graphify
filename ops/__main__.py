@@ -8,7 +8,7 @@
   todo [claude|jay]         list orders waiting on someone
   resume <id> [note]        clear a wait after fixing what it asked for
   sent <id>                 record that the delivery email went out (finishes the order)
-  purge [days]              delete customer code for orders delivered N days ago (default 7)
+  purge [days]              delete customer data past each product's retention period (or N days)
   stages                    list each product's stages
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import sys
 
-from .core import Reject, get_order, load_orders, now, purge_code, resume, tick, write_board
+from .core import Reject, get_order, load_orders, now, purge_customer_data, resume, tick, write_board
 from .intake import order_from_message
 from .pipelines import PIPELINES
 
@@ -62,8 +62,8 @@ def main(argv: list[str]) -> int:
         resume(o, "delivery email sent")
         tick(PIPELINES)
     elif cmd == "purge":
-        for oid in purge_code(int(args[0]) if args else 7):
-            print(f"deleted code for {oid}")
+        for oid in purge_customer_data(PIPELINES, int(args[0]) if args else None):
+            print(f"deleted customer data for {oid}")
     elif cmd == "stages":
         for p in PIPELINES.values():
             print(f"{p.product} ({p.title}, ${p.price_usd}):")

@@ -1,39 +1,78 @@
-"""Done-for-you customer list cleanup: messy CSV in, clean CSV + review list + report out.
+"""Done-for-you spreadsheet & contact list cleanup ($249 on Fiverr, up to 10,000 rows).
 
 intake -> map_columns -> clean -> qa -> package -> deliver
 
-Shows the same pattern with a different work step. When the customer's column
+Same pattern as X-ray with a different work step. When the customer's column
 names differ from the cleaner's, the order waits for Claude to write a column
-map instead of guessing.
+map instead of guessing. Buyer files are personal data: every copy is deleted
+30 days after delivery, as the gig promises.
 """
 from __future__ import annotations
 
-import csv
-import json
 import contextlib
+import csv
 import io
+import json
 import shutil
 from pathlib import Path
 
-from ..core import Order, Pipeline, Reject, Stage, Wait
+from ..core import Order, Pipeline, Reject, Stage, Wait, ops_home
 from . import clean_customers
 from .common import deliver_stage, package_stage
 
 EXPECTED = ["Customer Name", "Email", "Phone", "City", "State", "First Order", "Lifetime Spend", "Notes"]
+MAX_ROWS = 10_000  # the gig's limit; bigger files get a custom offer
+
+
+def _src(fields: dict) -> str:
+    return fields.get("file_path") or fields.get("csv_path") or ""
 
 
 def _validate(fields: dict) -> None:
-    if not fields.get("csv_path"):
-        raise Reject("order has no csv_path (the uploaded file)")
+    if not _src(fields):
+        raise Reject("order has no file_path (the buyer's uploaded file)")
+    if Path(_src(fields)).suffix.lower() not in (".csv", ".xlsx"):
+        raise Reject("only .csv and .xlsx files are supported")
+
+
+def _xlsx_to_csv(src: Path, dest: Path) -> None:
+    import openpyxl
+
+    wb = openpyxl.load_workbook(src, read_only=True, data_only=True)
+    ws = wb.worksheets[0]
+    with open(dest, "w", newline="") as fh:
+        w = csv.writer(fh)
+        for row in ws.iter_rows(values_only=True):
+            w.writerow(["" if v is None else v for v in row])
+
+
+def _csv_to_xlsx(src: Path, dest: Path) -> None:
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    with open(src, newline="") as fh:
+        for row in csv.reader(fh):
+            ws.append(row)
+    wb.save(dest)
 
 
 def intake(o: Order) -> None:
-    src = Path(o.fields["csv_path"])
+    src = Path(_src(o.fields))
     if not src.exists():
-        raise Wait(f"customer file {src} not found; ask the customer to upload it", "jay")
+        raise Wait(f"buyer's file {src} not found; download it from the order and save it there", "jay")
     if src.stat().st_size > 50_000_000:
-        raise Wait("file is over 50 MB; quote a custom price", "jay")
-    shutil.copy(src, o.workdir / "original.csv")
+        raise Wait("file is over 50 MB; send the buyer a custom offer", "jay")
+    if src.suffix.lower() == ".xlsx":
+        _xlsx_to_csv(src, o.workdir / "original.csv")
+        o.data["input_format"] = "xlsx"
+    else:
+        shutil.copy(src, o.workdir / "original.csv")
+        o.data["input_format"] = "csv"
+    with open(o.workdir / "original.csv", newline="", encoding="utf-8-sig") as fh:
+        rows = sum(1 for _ in fh) - 1
+    if rows > MAX_ROWS:
+        raise Wait(f"{rows:,} rows, over the {MAX_ROWS:,}-row gig limit; send the buyer a custom offer", "jay")
 
 
 def map_columns(o: Order) -> None:
@@ -46,7 +85,8 @@ def map_columns(o: Order) -> None:
         mapping = json.loads(mapping_p.read_text())
     else:
         raise Wait(f"columns {header} don't match {EXPECTED}; write {mapping_p} as "
-                   f'{{"Expected Name": "Their Column"}}, then `ops resume {o.id}`', "claude")
+                   f'{{"Expected Name": "Their Column"}} (leave out ones they lack), then `ops resume {o.id}`',
+                   "claude")
     with open(o.workdir / "original.csv", newline="", encoding="utf-8-sig") as fh:
         rows = list(csv.DictReader(fh))
     with open(o.workdir / "mapped.csv", "w", newline="") as fh:
@@ -62,6 +102,9 @@ def clean(o: Order) -> None:
     with contextlib.redirect_stdout(io.StringIO()):
         clean_customers.main(str(o.workdir / "mapped.csv"), str(o.workdir / "clean.csv"),
                              str(o.workdir / "CHANGES_REPORT.md"))
+    if o.data.get("input_format") == "xlsx":
+        for name in ("clean", "clean_needs_review"):
+            _csv_to_xlsx(o.workdir / f"{name}.csv", o.workdir / f"{name}.xlsx")
 
 
 def qa(o: Order) -> None:
@@ -80,21 +123,40 @@ def qa(o: Order) -> None:
         raise Wait("QA failed: " + "; ".join(problems), "claude")
 
 
-def _name(o: Order) -> str:
-    return f"customer-list-cleanup-{o.id[-6:]}"
+def _files(o: Order) -> list[str]:
+    ext = "xlsx" if o.data.get("input_format") == "xlsx" else "csv"
+    return [f"clean.{ext}", f"clean_needs_review.{ext}", "CHANGES_REPORT.md"]
+
+
+def _package(o: Order) -> None:
+    package_stage(_files(o), lambda o: f"list-cleanup-{o.id[-6:]}").run(o)
+
+
+def _customer_data(o: Order) -> list[Path]:
+    paths = [o.home / "work" / o.id, o.home / "deliverables" / o.id]
+    src = Path(_src(o.fields))
+    if src.resolve().is_relative_to(ops_home()):
+        paths.append(src)  # only files we stored; never touch a path outside the order desk
+    return paths
+
+
+def _body(o: Order) -> str:
+    return (f"Hi {o.fields.get('name') or 'there'},\n\n"
+            "Your cleaned list is attached. CHANGES_REPORT.md explains every fix. The needs-review file "
+            "lists the rows where a guess would have been worse than a blank, so you can decide those.\n\n"
+            "Your files are deleted from our side 30 days after delivery.\n\n"
+            "Thanks for your order,\n{sender}\n")
 
 
 PIPELINE = Pipeline(
-    product="cleanup", title="Customer list cleanup", price_usd=149, validate=_validate,
+    product="cleanup", title="List cleanup", price_usd=249, validate=_validate,
+    turnaround_hours=48, retention_days=30, customer_data=_customer_data,
     stages=[
-        Stage("intake", intake, "find the uploaded file"),
+        Stage("intake", intake, "find the buyer's file, convert Excel, check the row limit"),
         Stage("map_columns", map_columns, "match their columns to the cleaner's"),
         Stage("clean", clean, "normalize, merge duplicates, flag problems"),
         Stage("qa", qa, "no rows lost, report matches the data"),
-        package_stage(["clean.csv", "clean_needs_review.csv", "CHANGES_REPORT.md"], _name),
-        deliver_stage(lambda o: "Your cleaned customer list",
-                      lambda o: f"Hi {o.fields.get('name') or 'there'},\n\nYour cleaned list is attached. "
-                                "CHANGES_REPORT.md explains every fix; clean_needs_review.csv lists the rows "
-                                "where a guess would have been worse than a blank.\n\nThanks,\n{sender}\n"),
+        Stage("package", _package, "zip the deliverable"),
+        deliver_stage(lambda o: "Your cleaned customer list", _body),
     ],
 )
