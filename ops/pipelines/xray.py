@@ -211,7 +211,7 @@ def _body(o: Order) -> str:
     deleted = (_dt.date.today() + _dt.timedelta(days=7)).isoformat()
     return f"""Here's your report: {{drive_link}}
 
-Open graph.html in any browser for the interactive map, and start with XRAY_GUIDE for the written tour. You can send up to two follow-up questions by replying to this email. We'll delete your code on {deleted}. If the report isn't useful, reply within 7 days for a full refund.
+Open graph.html in any browser for the interactive map, and start with XRAY_GUIDE for the written tour. You can send up to two follow-up questions by replying to this email. We'll delete your code on {deleted}. If the report isn't useful, reply to this email within 7 days for a full refund.
 
 {{sender}}
 """
