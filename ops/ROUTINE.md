@@ -28,11 +28,20 @@ anywhere else are lost when the container ends.
   `python -m ops new kit price_usd=<amount> email=<buyer> external_id=<receipt>` so the board counts them.
 - If the Gmail connector is available, search for Stripe payment emails and
   buyer emails received since the last run. For each new payment not already on
-  the board, send confirmation template A, then create the order:
+  the board, create the order, then handle confirmation template A (see the
+  email rule below):
   `python -m ops new xray repo_url=<link> email=<buyer> name=<buyer name> external_id=<order number>`.
   Use the receipt number as external_id; that makes this safe to repeat. Pass
   `repo_url=PRIVATE` when the buyer wrote PRIVATE. If there is no link at all,
-  `new` prints "rejected"; send reminder template B (at most twice per order).
+  `new` prints "rejected"; handle reminder template B (at most twice per order).
+- Stripe sends payment emails from `notifications@stripe.com` to jay's Gmail.
+  Search `from:stripe.com newer_than:1d` and read each match in full; only
+  emails about a live payment are orders.
+
+**Email rule.** With `"auto_send": true` in `$OPS_HOME/config.json` (jay's
+standing OK), send customer emails. Without it, create each one as a Gmail
+**draft** and list it under "Needs jay" in your report. Never send a customer
+email without that OK.
 
 ## 3. Push orders forward
 
