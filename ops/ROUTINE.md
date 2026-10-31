@@ -33,8 +33,9 @@ anywhere else are lost when the container ends.
   `python -m ops new xray repo_url=<link> email=<buyer> name=<buyer name> external_id=<order number>`.
   Use the receipt number as external_id; that makes this safe to repeat. X-ray
   takes public GitHub repositories only. If there is no link, or the buyer wrote
-  PRIVATE, `new` prints "rejected"; handle reminder template B (at most twice per
-  order) asking for a public GitHub link.
+  PRIVATE, `new` prints "rejected"; handle template B (at most twice per
+  order). If there is still no working public URL 72 hours after payment, draft
+  a refund for jay.
 - Stripe sends payment emails from `notifications@stripe.com` to jay's Gmail.
   Search `from:stripe.com newer_than:14d` and read each match in full; only
   emails about a live payment are orders. The window is deliberately much longer
@@ -55,8 +56,8 @@ Run `python -m ops tick`, then `python -m ops todo claude`. For each item:
 | Waiting reason starts with | What you do |
 |---|---|
 | `write .../XRAY_GUIDE.md from .../BRIEF.md` | Read BRIEF.md. Follow its system section exactly. Read the real source files in `work/<id>/repo/` for anything you cite. Write the guide to the path given, then `python -m ops resume <id> "guide written"`. |
-| `repo is private or missing` | The link didn't clone. Handle template B asking for a public GitHub link. When the buyer replies with one, `ops show` the order, set `"repo_url"` in its fields, then `resume`. |
-| `repo has ... lines, over the` | Email the buyer the refund-or-main-folder offer from OPERATIONS.md step 5. If they pick a folder, `ops show` the order, add `"subdir": "<folder>"` to its fields, then `resume`. |
+| `repo is private or missing` | The link didn't clone. Handle template B (same limits as above). When the buyer replies with one, `ops show` the order, set `"repo_url"` in its fields, then `resume`. |
+| `repo has ... lines, over the` | Handle template D (main-folder report or full refund). A "refund" reply goes to jay. If they pick a folder, `ops show` the order, add `"subdir": "<folder>"` to its fields, then `resume`. |
 | `QA failed` | Open `work/<id>/QA_REPORT.md`, fix only what it lists in the guide, then `resume`. Never edit the QA rules to get a pass. |
 | `columns [...] don't match` | Write `column_map.json` mapping each expected column to the customer's column name, then `resume`. |
 | `deliver delivery_message.md on the Fiverr order page` | Only with `auto_send`. Over Remote Control in jay's browser, open the Fiverr order, upload the files listed at the top of the draft, paste the message, click Deliver, then `ops sent <id>`. Without Remote Control, leave it for jay. |

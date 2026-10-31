@@ -16,7 +16,7 @@ from ..core import Order, Pipeline, Reject, Stage, Wait
 from .common import deliver_stage, package_stage, scan_secrets, writer_stage
 
 HERE = Path(__file__).parent
-ALLOWED_HOSTS = {"github.com", "gitlab.com", "bitbucket.org", "codeberg.org"}
+ALLOWED_HOSTS = {"github.com"}  # X-ray takes public GitHub repositories only
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".kt", ".rb", ".php",
             ".cs", ".c", ".cc", ".cpp", ".h", ".hpp", ".swift", ".scala", ".ex", ".exs", ".vue", ".svelte"}
 MAX_CODE_LINES = 150_000  # the sales page promise; bigger repos get quoted first
@@ -81,8 +81,8 @@ def fetch(o: Order) -> None:
     if not files:
         raise Reject("no source code found in the repo")
     if lines > MAX_CODE_LINES:
-        raise Wait(f"repo has {lines:,} lines, over the {MAX_CODE_LINES:,} limit; offer the buyer a refund "
-                   "or a report on the main source folder (set fields.subdir), per OPERATIONS.md", "claude")
+        raise Wait(f"repo has {lines:,} lines, over the {MAX_CODE_LINES:,} limit; send template D (main-folder "
+                   "report or full refund); if they reply \"main\", set fields.subdir and resume", "claude")
     o.log(f"fetched {len(files)} code files, {lines:,} lines")
 
 
