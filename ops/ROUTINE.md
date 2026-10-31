@@ -27,7 +27,7 @@ anywhere else are lost when the container ends.
   Repo Kit sales need nothing: Stripe delivers them; log them with
   `python -m ops new kit price_usd=<amount> email=<buyer> external_id=<receipt>` so the board counts them.
 - If the Gmail connector is available, search for Stripe payment emails and
-  buyer emails received since the last run. For each new payment not already on
+  buyer emails received since the last run (with the overlap below). For each new payment not already on
   the board, create the order, then handle confirmation template A (see the
   email rule below):
   `python -m ops new xray repo_url=<link> email=<buyer> name=<buyer name> external_id=<order number>`.
@@ -35,8 +35,12 @@ anywhere else are lost when the container ends.
   `repo_url=PRIVATE` when the buyer wrote PRIVATE. If there is no link at all,
   `new` prints "rejected"; handle reminder template B (at most twice per order).
 - Stripe sends payment emails from `notifications@stripe.com` to jay's Gmail.
-  Search `from:stripe.com newer_than:1d` and read each match in full; only
-  emails about a live payment are orders.
+  Search `from:stripe.com newer_than:14d` and read each match in full; only
+  emails about a live payment are orders. The window is deliberately much longer
+  than the time between runs so payments made while runs were missed are still
+  found; orders are deduplicated by receipt number (`external_id`), so payments
+  already on the board are skipped. If runs may have stopped for longer than 14
+  days, widen the search to cover the gap.
 
 **Email rule.** With `"auto_send": true` in `$OPS_HOME/config.json` (jay's
 standing OK), send customer emails. Without it, create each one as a Gmail
