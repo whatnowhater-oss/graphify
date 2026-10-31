@@ -16,7 +16,7 @@ from ..core import Order, Pipeline, Reject, Stage, Wait
 from .common import deliver_stage, package_stage, scan_secrets, writer_stage
 
 HERE = Path(__file__).parent
-ALLOWED_HOSTS = {"github.com", "gitlab.com", "bitbucket.org", "codeberg.org"}
+ALLOWED_HOSTS = {"github.com"}  # X-ray takes public GitHub repositories only
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".kt", ".rb", ".php",
             ".cs", ".c", ".cc", ".cpp", ".h", ".hpp", ".swift", ".scala", ".ex", ".exs", ".vue", ".svelte"}
 MAX_CODE_LINES = 150_000  # the sales page promise; bigger repos get quoted first
@@ -30,7 +30,7 @@ def _validate(fields: dict) -> None:
     if not url:
         raise Reject("order has no repo_url")
     if url.upper() == "PRIVATE":
-        return  # code arrives later as a zip by email
+        raise Reject("X-ray takes public GitHub repositories only; ask the buyer for a public link (template B)")
     if url.startswith(("/", "file://")):
         return  # local path: used by tests and for repos jay uploads by hand
     u = urlparse(url)
@@ -61,9 +61,6 @@ def fetch(o: Order) -> None:
     if (dest / ".git").exists() or (dest.exists() and any(dest.iterdir())):
         return
     url = o.fields["repo_url"].strip()
-    if url.upper() == "PRIVATE":
-        raise Wait(f"private code: download the buyer's zip (Google Drive link in their email), unzip it "
-                   f"into {dest} without running anything in it, then `ops resume {o.id}`", "claude")
     if url.startswith(("/", "file://")):
         src = Path(url.removeprefix("file://"))
         shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "graphify-out"))
@@ -74,7 +71,8 @@ def fetch(o: Order) -> None:
         if r.returncode != 0:
             shutil.rmtree(dest, ignore_errors=True)
             if "not found" in r.stderr.lower() or "authentication" in r.stderr.lower():
-                raise Wait(f"repo is private or missing; ask the customer for read access ({r.stderr.strip()[:200]})", "jay")
+                raise Wait(f"repo is private or missing; email the buyer template B asking for a public GitHub link, "
+                           f"then set fields.repo_url and `ops resume {o.id}` ({r.stderr.strip()[:200]})", "claude")
             raise RuntimeError(r.stderr.strip()[:500])
     files = _code_files(dest)
     lines = sum(len(p.read_bytes().splitlines()) for p in files)
@@ -83,8 +81,8 @@ def fetch(o: Order) -> None:
     if not files:
         raise Reject("no source code found in the repo")
     if lines > MAX_CODE_LINES:
-        raise Wait(f"repo has {lines:,} lines, over the {MAX_CODE_LINES:,} limit; offer the buyer a refund "
-                   "or a report on the main source folder (set fields.subdir), per OPERATIONS.md", "claude")
+        raise Wait(f"repo has {lines:,} lines, over the {MAX_CODE_LINES:,} limit; send template D (main-folder "
+                   "report or full refund); if they reply \"main\", set fields.subdir and resume", "claude")
     o.log(f"fetched {len(files)} code files, {lines:,} lines")
 
 
@@ -197,8 +195,6 @@ def qa(o: Order) -> None:
 
 def _repo_name(o: Order) -> str:
     url = o.fields["repo_url"].strip()
-    if url.upper() == "PRIVATE":
-        return o.fields.get("repo_name") or "your-code"
     return re.sub(r"[^\w-]", "", url.rstrip("/").split("/")[-1].removesuffix(".git"))
 
 
@@ -215,7 +211,7 @@ def _body(o: Order) -> str:
     deleted = (_dt.date.today() + _dt.timedelta(days=7)).isoformat()
     return f"""Here's your report: {{drive_link}}
 
-Open graph.html in any browser for the interactive map, and start with XRAY_GUIDE for the written tour. You can send up to two follow-up questions by replying to this email. We'll delete your code on {deleted}. If the report isn't useful, reply within 7 days for a full refund.
+Open graph.html in any browser for the interactive map, and start with XRAY_GUIDE for the written tour. You can send up to two follow-up questions by replying to this email. We'll delete your code on {deleted}. If the report isn't useful, reply to this email within 7 days for a full refund.
 
 {{sender}}
 """
