@@ -59,8 +59,8 @@ because that's what reaches jay.
 Fiverr orders come in by hand or from the Fiverr notification email:
 `ops new cleanup file_path=$OPS_HOME/uploads/<order>.xlsx channel=fiverr external_id=fiverr:<order> name=<buyer>`.
 
-Buyers who write PRIVATE instead of a link get an order that waits for Claude to
-fetch their zip from Google Drive. Customer data is deleted after each product's promised
+X-ray takes public GitHub repositories only; an order without a public link is
+rejected so the buyer can be asked for one. Customer data is deleted after each product's promised
 retention period (`ops purge`): 7 days for X-ray code, 30 days for cleanup files.
 
 ## What needs jay, honestly

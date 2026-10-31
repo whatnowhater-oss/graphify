@@ -30,7 +30,7 @@ def _validate(fields: dict) -> None:
     if not url:
         raise Reject("order has no repo_url")
     if url.upper() == "PRIVATE":
-        return  # code arrives later as a zip by email
+        raise Reject("X-ray takes public GitHub repositories only; ask the buyer for a public link (template B)")
     if url.startswith(("/", "file://")):
         return  # local path: used by tests and for repos jay uploads by hand
     u = urlparse(url)
@@ -61,9 +61,6 @@ def fetch(o: Order) -> None:
     if (dest / ".git").exists() or (dest.exists() and any(dest.iterdir())):
         return
     url = o.fields["repo_url"].strip()
-    if url.upper() == "PRIVATE":
-        raise Wait(f"private code: download the buyer's zip (Google Drive link in their email), unzip it "
-                   f"into {dest} without running anything in it, then `ops resume {o.id}`", "claude")
     if url.startswith(("/", "file://")):
         src = Path(url.removeprefix("file://"))
         shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "graphify-out"))
@@ -74,7 +71,8 @@ def fetch(o: Order) -> None:
         if r.returncode != 0:
             shutil.rmtree(dest, ignore_errors=True)
             if "not found" in r.stderr.lower() or "authentication" in r.stderr.lower():
-                raise Wait(f"repo is private or missing; ask the customer for read access ({r.stderr.strip()[:200]})", "jay")
+                raise Wait(f"repo is private or missing; email the buyer template B asking for a public GitHub link, "
+                           f"then set fields.repo_url and `ops resume {o.id}` ({r.stderr.strip()[:200]})", "claude")
             raise RuntimeError(r.stderr.strip()[:500])
     files = _code_files(dest)
     lines = sum(len(p.read_bytes().splitlines()) for p in files)
@@ -197,8 +195,6 @@ def qa(o: Order) -> None:
 
 def _repo_name(o: Order) -> str:
     url = o.fields["repo_url"].strip()
-    if url.upper() == "PRIVATE":
-        return o.fields.get("repo_name") or "your-code"
     return re.sub(r"[^\w-]", "", url.rstrip("/").split("/")[-1].removesuffix(".git"))
 
 

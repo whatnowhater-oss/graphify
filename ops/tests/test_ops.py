@@ -169,28 +169,32 @@ def test_crashing_stage_retries_then_escalates(home, pipelines, monkeypatch):
     assert o.data["status"] == "failed" and "network down" in o.data["waiting_on"]["reason"]
 
 
-def test_stripe_payment_link_private_order_and_purge(home, pipelines, tmp_path):
+def test_stripe_payment_link_order_and_purge(home, pipelines, tmp_path):
     from ops.core import get_order, purge_customer_data, resume, tick
     from ops.intake import drop_in_inbox
 
-    session = {"id": "cs_1", "payment_status": "paid", "amount_total": 19900,
-               "customer_details": {"email": "p@x.io", "name": "P"}, "metadata": {"product": "xray"},
-               "custom_fields": [{"key": "repo", "type": "text",
-                                  "label": {"type": "custom", "custom": "Public GitHub URL, or write PRIVATE"},
-                                  "text": {"value": "PRIVATE"}}]}
-    drop_in_inbox({"provider": "stripe", "payload": {"type": "checkout.session.completed",
-                                                     "data": {"object": session}}}, "st1")
+    def session(sid, repo):
+        return {"provider": "stripe", "payload": {"type": "checkout.session.completed", "data": {"object": {
+            "id": sid, "payment_status": "paid", "amount_total": 19900,
+            "customer_details": {"email": "p@x.io", "name": "P"}, "metadata": {"product": "xray"},
+            "custom_fields": [{"key": "repo", "type": "text",
+                               "label": {"type": "custom", "custom": "Public GitHub repository URL"},
+                               "text": {"value": repo}}]}}}}
+
+    # Private code is no longer accepted: the order is rejected so the buyer gets template B
+    drop_in_inbox(session("cs_0", "PRIVATE"), "st0")
+    tick(pipelines)
+    why = (home / "inbox" / "rejected" / "st0.json.why.txt").read_text()
+    assert "public GitHub" in why
+
+    repo = _tiny_repo(tmp_path)
+    drop_in_inbox(session("cs_1", str(repo)), "st1")
     tick(pipelines)
     o = get_order("xray")
     assert o.data["external_id"] == "stripe:cs_1" and o.data["price_usd"] == 199
-    assert o.data["stage"] == "fetch" and "private code" in o.data["waiting_on"]["reason"]
-
-    # Claude unzips the buyer's code into the repo folder; the rest of the pipeline runs as normal
+    assert o.fields["repo_url"] == str(repo)
     if shutil.which("graphify") is None:
         return
-    shutil.copytree(_tiny_repo(tmp_path), o.workdir / "repo")
-    resume(o, "zip unpacked")
-    tick(pipelines)
     o = get_order(o.id)
     assert o.data["stage"] == "write_guide"
     (o.workdir / "XRAY_GUIDE.md").write_text(_guide(
@@ -199,7 +203,7 @@ def test_stripe_payment_link_private_order_and_purge(home, pipelines, tmp_path):
     tick(pipelines)
     o = get_order(o.id)
     email = (o.outdir / "delivery_email.md").read_text()
-    assert "Subject: Your Codebase X-ray of your-code is ready" in email and "{drive_link}" in email
+    assert f"Subject: Your Codebase X-ray of {repo.name} is ready" in email and "{drive_link}" in email
 
     o.data.update(sent_at="2026-01-01T00:00:00Z", status="done")
     o.save()
