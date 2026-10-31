@@ -24,8 +24,10 @@ anywhere else are lost when the container ends.
 - Fiverr order emails: download the buyer's file into `$OPS_HOME/uploads/`
   (Remote Control in jay's browser, or ask jay), then
   `python -m ops new cleanup file_path=<that file> channel=fiverr external_id=fiverr:<order number> name=<buyer>`.
-  Repo Kit sales need nothing: Stripe delivers them; log them with
-  `python -m ops new kit price_usd=<amount> email=<buyer> external_id=<receipt>` so the board counts them.
+  Repo Kit sales ($19 guide, $49 kit, $149 team; Stripe metadata `product=kit`):
+  `python -m ops new kit price_usd=<amount> email=<buyer> name=<buyer name> external_id=<receipt>`.
+  Tick copies the matching zip into the order and writes `delivery_email.md`;
+  the zip is emailed as an attachment (no Drive link).
 - If the Gmail connector is available, search for Stripe payment emails and
   buyer emails received since the last run (with the overlap below). For each new payment not already on
   the board, create the order, then handle confirmation template A (see the
@@ -61,7 +63,8 @@ Run `python -m ops tick`, then `python -m ops todo claude`. For each item:
 | `QA failed` | Open `work/<id>/QA_REPORT.md`, fix only what it lists in the guide, then `resume`. Never edit the QA rules to get a pass. |
 | `columns [...] don't match` | Write `column_map.json` mapping each expected column to the customer's column name, then `resume`. |
 | `deliver delivery_message.md on the Fiverr order page` | Only with `auto_send`. Over Remote Control in jay's browser, open the Fiverr order, upload the files listed at the top of the draft, paste the message, click Deliver, then `ops sent <id>`. Without Remote Control, leave it for jay. |
-| `deliver delivery_email.md by email` | Only appears when jay has set `"auto_send": true` in `$OPS_HOME/config.json` (jay's standing OK for deliveries). Upload the zip to Google Drive shared with the buyer's email only, put that link in place of `{drive_link}`, send with the Gmail connector, then `python -m ops sent <id>`. |
+| `deliver delivery_email.md by email` | Only appears when jay has set `"auto_send": true` in `$OPS_HOME/config.json` (jay's standing OK for deliveries). For X-ray, upload the zip to Google Drive shared with the buyer's email only and put that link in place of `{drive_link}`; for kits, attach the `Attach:` file instead (Gmail limit 25 MB). Send with the Gmail connector, then `python -m ops sent <id>`. |
+| `approve .../delivery_email.md` (jay) | Without `auto_send`, still do the prep: create the Gmail draft yourself (To, Subject and body from the file, the `Attach:` file base64-encoded as an attachment) and list the draft under "Needs jay". Kit buyers are waiting for their download, so do this on the same run. |
 | `... failed: ...` (status failed) | Read `last_error` in `python -m ops show <id>`. Fix the cause if it is in this repo's `ops/` code, otherwise leave it for jay with a one-line explanation. |
 
 Run `python -m ops tick` again after resuming, until `todo claude` is empty or

@@ -21,7 +21,7 @@ then show as failed on the board. Tick is safe to run as often as you like.
 |---|---|---|
 | `xray`: Codebase X-ray, $199 | intake, fetch, map, write_guide, qa, package, deliver | The code map needs no LLM. The guide is written by Claude: through the API if `ANTHROPIC_API_KEY` is set, otherwise by a Claude session following `BRIEF.md`. QA rejects any guide that cites a file not in the repo, misses a section, or leaks a secret. |
 | `cleanup`: list cleanup, $249 on Fiverr | intake, map_columns, clean, qa, package, deliver | Deterministic cleaner for .csv or .xlsx up to 10,000 rows (Excel in, Excel out). If the buyer's columns are named differently, Claude writes a column map instead of guessing. QA checks no rows were lost. Delivered on the Fiverr order page; every copy of the buyer's file is deleted 30 days after delivery. |
-| `kit`: Repo Kit, $19 / $49 / $149 | record | Stripe's checkout redirect delivers the download, so the order is just logged and counted. |
+| `kit`: Repo Kit, $19 / $49 / $149 | record, attach, deliver | The matching zip (guide, kit or team) is attached to a delivery email; no Drive link. |
 
 Add a product by writing `ops/pipelines/<name>.py` with a `PIPELINE` and listing it
 in `ops/pipelines/__init__.py`. `package_stage`, `deliver_stage` and

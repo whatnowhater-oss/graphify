@@ -249,15 +249,53 @@ def test_more_than_10k_rows_waits_for_a_custom_offer(home, pipelines, tmp_path):
     assert "custom offer" in get_order(o.id).data["waiting_on"]["reason"]
 
 
-def test_repo_kit_sale_is_logged_as_done(home, pipelines):
-    from ops.core import load_orders, summarize, tick
+def test_repo_kit_sale_emails_the_matching_zip(home, pipelines, tmp_path):
+    import json
+    import zipfile
+
+    from ops.__main__ import main
+    from ops.core import get_order, load_orders, summarize, tick
     from ops.intake import drop_in_inbox
 
-    session = {"id": "cs_kit", "payment_status": "paid", "amount_total": 4900,
-               "customer_details": {"email": "k@x.io"}, "custom_fields": []}
-    drop_in_inbox({"provider": "stripe", "payload": {"type": "checkout.session.completed",
-                                                     "data": {"object": session}}}, "kit1")
+    kit_dir = tmp_path / "kits"
+    kit_dir.mkdir()
+    for name in ("agent-ready-guide-v1.zip", "agent-ready-kit-v1.zip", "agent-ready-kit-team-v1.zip"):
+        with zipfile.ZipFile(kit_dir / name, "w") as z:
+            z.writestr("START_HERE.md", name)
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"kit_dir": str(kit_dir)}))
+
+    for cents, sid in ((1900, "cs_g"), (4900, "cs_k"), (14900, "cs_t")):
+        session = {"id": sid, "payment_status": "paid", "amount_total": cents,
+                   "customer_details": {"email": f"{sid}@x.io", "name": "Kim Lee"},
+                   "metadata": {"product": "kit"}, "custom_fields": []}
+        drop_in_inbox({"provider": "stripe", "payload": {"type": "checkout.session.completed",
+                                                         "data": {"object": session}}}, sid)
     tick(pipelines)
-    (o,) = load_orders()
-    assert o.data["product"] == "kit" and o.data["status"] == "done" and o.fields["tier"] == "kit"
-    assert summarize([o])["kept_this_week"] == 48
+    orders = {o.data["external_id"]: o for o in load_orders()}
+    expect = {"stripe:cs_g": ("guide", "agent-ready-guide-v1.zip"), "stripe:cs_k": ("kit", "agent-ready-kit-v1.zip"),
+              "stripe:cs_t": ("team", "agent-ready-kit-team-v1.zip")}
+    for ext, (tier, zname) in expect.items():
+        o = orders[ext]
+        assert o.fields["tier"] == tier
+        draft = (o.outdir / "delivery_email.md").read_text()
+        assert f"To: {ext.split(':')[1]}@x.io" in draft and f"Attach: {o.outdir / zname}" in draft
+        assert "Hi Kim," in draft and "reply to this email" in draft and "{sender}" not in draft
+        assert (o.outdir / zname).read_bytes() == (kit_dir / zname).read_bytes()
+        assert o.data["waiting_on"]["who"] == "jay"  # no auto_send: jay approves the draft
+
+    o = orders["stripe:cs_k"]
+    main(["sent", o.id])
+    assert get_order(o.id).data["status"] == "done"
+    assert summarize(load_orders())["kept_this_week"] == 48
+
+    # with auto_send on, the send is Claude's job
+    (home / "config.json").write_text(json.dumps({"kit_dir": str(kit_dir), "auto_send": True}))
+    session = {"id": "cs_a", "payment_status": "paid", "amount_total": 1900,
+               "customer_details": {"email": "a@x.io"}, "metadata": {"product": "kit"}, "custom_fields": []}
+    drop_in_inbox({"provider": "stripe", "payload": {"type": "checkout.session.completed",
+                                                     "data": {"object": session}}}, "cs_a")
+    tick(pipelines)
+    (a,) = [x for x in load_orders() if x.data["external_id"] == "stripe:cs_a"]
+    assert a.data["waiting_on"]["who"] == "claude"
+
